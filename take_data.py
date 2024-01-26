@@ -12,12 +12,11 @@ interval = '1d'  # Daily basis
 # Retrieve data
 data = yf.download(symbols, start=start_date, end=end_date, interval=interval)
 
+df = pd.DataFrame(data)
+
+df = df.iloc[:, :2]
+
 # Save to CSV file
-csv_file_path = 'exchange_rates_data.csv'
-data.to_csv(csv_file_path)
+df.to_csv('tr_usd_exchance/exchange_rates_data.csv', index=False)
 
-# Read the saved CSV file
-loaded_data = pd.read_csv(csv_file_path)
 
-# Display the loaded data
-print(loaded_data)
