@@ -5,8 +5,8 @@ import pandas as pd
 symbols = ['TRY=X', 'USDT=X']
 
 # Data retrieval range and interval
-start_date = '2020-01-01'
-end_date = '2024-01-26'
+start_date = '2010-01-01'
+end_date = '2024-01-01'
 interval = '1d'  # Daily basis
 
 # Retrieve data
