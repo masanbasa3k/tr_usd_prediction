@@ -1,99 +1,95 @@
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error
 
-# Load data
-data = pd.read_csv("tr_usd_exchance/exchange_rates_data.csv")
+# Load the dataset
+file_path = "texchange_rates_data.csv"
+data_df = pd.read_csv(file_path, parse_dates=['Date'], index_col='Date')
 
-# Display the column names in the DataFrame
-print("Column names:", data.columns)
+# Normalize the data
+scaler = MinMaxScaler(feature_range=(-1, 1))
+data_np = scaler.fit_transform(data_df['Value'].values.reshape(-1, 1))
+data_tensor = torch.FloatTensor(data_np).view(-1)
 
-# Ensure that 'Date' is present in the DataFrame
-if 'Date' not in data.columns:
-    raise ValueError("Column 'Date' not found in the DataFrame.")
+# Split the data into training and test sets
+train_size = int(len(data_tensor) * 0.8)
+train_data, test_data = data_tensor[0:train_size], data_tensor[train_size:]
 
-# Create a DataFrame
-df = pd.DataFrame(data)
+# Helper function: Create an LSTM model
+class LSTMModel(nn.Module):
+    def __init__(self, input_size=1, hidden_layer_size=100, output_size=1):
+        super().__init__()
+        self.hidden_layer_size = hidden_layer_size
+        self.lstm = nn.LSTM(input_size, hidden_layer_size)
+        self.linear = nn.Linear(hidden_layer_size, output_size)
 
-# Convert 'Date' column to datetime
-df['Date'] = pd.to_datetime(df['Date'])
+    def forward(self, input_seq):
+        lstm_out, _ = self.lstm(input_seq.view(len(input_seq), 1, -1))
+        predictions = self.linear(lstm_out.view(len(input_seq), -1))
+        return predictions[-1]
 
-# Filter data for the year 2010 onwards
-df = df[df['Date'].dt.year >= 2010]
+# Create the model
+model = LSTMModel()
 
-# Sort the DataFrame by 'Date'
-df = df.sort_values(by='Date')
+# Loss function and optimizer
+loss_function = nn.MSELoss()
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
-# Create features (X) and target (y)
-X = df[['Date']]
-y = df['Value']
+# Training
+epochs = 10
 
-# Standardize the 'Date' feature
-scaler = StandardScaler()
-X_scaled = scaler.fit_transform(np.array(X).reshape(-1, 1))
+for epoch in range(epochs):
+    for i in range(len(train_data) - 1):
+        input_seq = train_data[i:i+1]
+        target = train_data[i+1:i+2]
 
-# Split the data into training and testing sets
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+        optimizer.zero_grad()
+        model.hidden = (torch.zeros(1, 1, model.hidden_layer_size),
+                        torch.zeros(1, 1, model.hidden_layer_size))
 
-# Standardize the 'Date' feature using the same scaler
-X_train_scaled = scaler.transform(np.array(X_train).reshape(-1, 1))
-X_test_scaled = scaler.transform(np.array(X_test).reshape(-1, 1))
+        prediction = model(input_seq)
 
-# Convert data to PyTorch tensors
-X_train_tensor = torch.from_numpy(X_train_scaled).float()
-X_test_tensor = torch.from_numpy(X_test_scaled).float()
-y_train_tensor = torch.from_numpy(y_train.values).float()
+        loss = loss_function(prediction, target)
+        loss.backward()
+        optimizer.step()
 
-# Define a simple neural network
-class SimpleNN(nn.Module):
-    def __init__(self):
-        super(SimpleNN, self).__init__()
-        self.fc = nn.Linear(1, 1)
+    # Print training loss every 10 epochs
+    if epoch % 10 == 0:
+        print(f'Epoch {epoch}/{epochs}, Loss: {loss.item()}')
 
-    def forward(self, x):
-        x = self.fc(x)
-        return x
+# Save the model
+torch.save(model.state_dict(), 'lstm_model.pth')
 
-# Create an instance of the model
-model = SimpleNN()
+# Testing
+model.eval()
+test_predictions = []
 
-# Define loss function and optimizer
-criterion = nn.MSELoss()
-optimizer = optim.SGD(model.parameters(), lr=0.01)
+for i in range(len(test_data)):
+    input_seq = test_data[i:i+1]
+    with torch.no_grad():
+        model.hidden = (torch.zeros(1, 1, model.hidden_layer_size),
+                        torch.zeros(1, 1, model.hidden_layer_size))
+        test_predictions.append(model(input_seq).item())
 
-# Training loop
-num_epochs = 2000
-for epoch in range(num_epochs):
-    # Forward pass
-    predictions = model(X_train_tensor)
-    loss = criterion(predictions, y_train_tensor)
+# Compare predictions with real data
+test_predictions = scaler.inverse_transform(np.array(test_predictions).reshape(-1, 1))
+real_data = scaler.inverse_transform(test_data.reshape(-1, 1))
 
-    # Backward pass and optimization
-    optimizer.zero_grad()
-    loss.backward()
-    optimizer.step()
+# Calculate error metrics
+mse = mean_squared_error(real_data, test_predictions)
+print('Mean Squared Error:', mse)
 
-    if (epoch + 1) % 100 == 0:
-        print(f'Epoch [{epoch+1}/{num_epochs}], Loss: {loss.item():.4f}')
-
-# Save the trained model (turn on if you want to download model)
-torch.save(model.state_dict(), 'simple_nn_model.pth')
-
-# Test the model
-with torch.no_grad():
-    predicted_values = model(X_test_tensor)
-
-# Plot the results
+# Visualize predictions and real values with dates on the x-axis
 plt.figure(figsize=(10, 6))
-plt.plot(df['Date'], df['Value'], label='Actual values')
-plt.plot(X_test, predicted_values.numpy(), label='Predicted values', linestyle='dashed', color='orange')
+plt.plot(data_df.index[:-len(test_data)], scaler.inverse_transform(train_data.reshape(-1, 1)), label='Training Data')
+plt.plot(data_df.index[-len(test_data):], real_data, label='Real Values')
+plt.plot(data_df.index[-len(test_data):], test_predictions, color='red', label='Predictions')
 plt.xlabel('Date')
-plt.ylabel('Value')
-plt.title('Neural Network Prediction')
+plt.ylabel('Exchange Rate')
+plt.title('Exchange Rate Prediction with LSTM')
 plt.legend()
 plt.show()
